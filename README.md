@@ -1,41 +1,41 @@
-# Smart Alarm & Light Hub Project
+# Smart Alarm & Light Hub
 
 ## Overview
+This project implements a multifunctional embedded system on an AVR microcontroller, combining:
 
-This repository hosts our Embedded Systems class project: a Smart Alarm & Light Hub integrating an alarm with door lock, a light-dimming interface with voltage monitoring, and SPI-based communication to a remote hub.
+- **Alarm & Door Lock**: Keypad-controlled arming/disarming with stepper-driven door lock
+- **Light Dimmer & Voltage Monitor**: PWM-based LED dimming with real-time voltage display
+- **SPI Communication**: Status updates sent to a remote hub
 
 ## Features
 
-### Alarm System
-- Two states: **ARMED** and **DISARMED**, controlled via distinct 3‑button codes entered on pushbuttons.  
-- Input code displayed on second LCD row; incorrect sequences clear input before retry.  
-- Correct arm code initiates a **10 s countdown** (displayed in last two digits of LCD row 2 via I2C), after which the stepper motor rotates 90° CW to lock the door.  
-- Door-locked state: red LED on, green LED off, LCD shows “ARMED.”  
-- In ARMED state, an incorrect disarm code triggers the alarm: red LED blinks every 250 ms, active buzzer sounds, LCD shows “ALARM.”  
-- Correct disarm code rotates stepper motor 90° CCW to unlock; red LED off, green LED on, LCD displays “DISARMED.”  
-- **Timer 1** serves as the system clock; its ISR handles button debouncing and the state‐machine timing.
+### 1. Alarm & Door Lock
+- **States**: `DISARMED` ↔ `ARMED`
+- **User Codes**: Two distinct 3-button sequences (one to arm, one to disarm)
+- **Debounce**: Software debounce implemented in a 1 ms Timer 1 ISR (8‑sample window)
+- **Countdown**: 10 s countdown (displayed on LCD) before locking; stepper rotates 90° CW
+- **Indicators**:
+  - *ARMED*: Red LED on, green LED off, LCD shows “ARMED”
+  - *ALARM* (wrong code in ARMED): Red LED blinks at 4 Hz, buzzer active, LCD shows “ALARM”
+  - *DISARMED*: Stepper rotates 90° CCW, green LED on, red LED off, LCD shows “DISARMED”
+- **Timer 1**: CTC mode, OCR1A=15999 → 1 ms tick @16 MHz; ISR handles debouncing, countdown, LED blink timing
 
-### Light Dimmer & Voltage Monitor
-- Pushbutton on **INT0** toggles blue LED on/off.  
-- Potentiometer input (analog channel) quantized to the 8 MSB; converted back to analog voltage.  
-- Real‑time voltage shown on first LCD row’s last four digits.
+### 2. Light Dimmer & Voltage Monitor
+- **Toggle**: Pushbutton on INT0 toggles blue LED on/off
+- **Dimming**: Potentiometer read via ADC (8 MSB), output via PWM to control LED brightness
+- **Voltage Display**: Measured voltage shown on LCD row 1 (last four digits)
 
-### SPI Communication to Remote Hub
-- When the alarm is triggered, send **0b10101010** to the Alarm HQ via SPI master.  
-- Upon disarm, send **0b01010101**.  
-- SPI configured with **idle clock high (CPOL=1)**, **sample on falling edge (CPHA=1)**, **SCK = 2 MHz**.  
-- Transmission complete triggers an SPI interrupt; remote HQ displays status on its LCD.
+### 3. SPI Communication to Remote Hub
+- **Trigger**: Send `0xAA` (alarm), `0x55` (disarm) over SPI master
+- **Configuration**: CPOL=1, CPHA=1, SCK=2 MHz
+- **Interrupt**: SPI interrupt on transmission complete; remote HQ updates its LCD
 
-## Hardware Setup
-
-- **ATmega328P microcontroller** (AVR-based)  
-- **Breadboard** and **Power Supply Module** (5 V output)  
-- **Jumper Wires** for prototyping connections  
-- **28BYJ-48 Stepper Motor** and **ULN2003 Driver Board** (for door lock mechanism)  
-- **Active Buzzer** for audible alarm  
-- **Discrete LEDs** (various colors) for visual status indication  
-- **Tactile Pushbuttons** for user input  
-- **Potentiometer** for PWM brightness control (used in the light dimmer interface)
+## Hardware
+- **MCU**: ATmega328P @16 MHz (5 V)
+- **Stepper**: 28BYJ‑48 + ULN2003 (for door locking)
+- **Inputs**: 3 × pushbuttons (code entry), 1 × pushbutton (dimmer), potentiometer
+- **Outputs**: 4 × LEDs (red, green, blue, status), active buzzer, I²C LCD (20×4)
+- **Communication**: SPI to remote hub
 
 ---
-*Crafted with passion for embedded systems!*  
+*Developed for ECE 484: Embedded Systems Design (Spring 2025)*
