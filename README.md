@@ -2,7 +2,7 @@
 
 ## Overview
 
-This repository hosts my Embedded Systems class project: a Smart Alarm & Light Hub integrating an alarm with door lock, a light-dimming interface with voltage monitoring, and SPI-based communication to a remote hub.
+This repository hosts our Embedded Systems class project: a Smart Alarm & Light Hub integrating an alarm with door lock, a light-dimming interface with voltage monitoring, and SPI-based communication to a remote hub.
 
 ## Features
 
