@@ -1,8 +1,8 @@
 /*
- * FinalProject.cpp
+ * main.cpp
  *
  * Created: 4/25/2025 1:32:14 PM
- * Author : logan
+ * Author : Logan Andrews and Carter Smith
  */ 
 
 #define F_CPU 16000000 // 16 MHz
@@ -41,19 +41,22 @@ volatile uint8_t switch_array[kBufferLength]={0};
 int8_t stepperState=0;
 int8_t stepperDirection=0;
 
+uint16_t oldVoltage = 0;
+
 //alarm code
-int8_t alarmcode[] = {2, 2, 1};
+int8_t alarmcode[] = {1, 2, 3};
 int8_t currentCode[] = {0, 0, 0};
-int8_t armedCode[] = {2, 3, 3};
+int8_t armedCode[] = {3, 2, 1};
 int8_t alarmIndex = 0;
 int8_t currentButton = 0;
 int8_t enableCountDown = 0;
 //10 second countdown
 int8_t countDownIndex = 10;
 int16_t countDownSecond = 0;
-
+double finalVoltage = 0;
 int8_t armed = 0;
 int8_t alarmEnable = 0;
+volatile uint8_t transmit_done = 0;
 //Sample switches at particular interval
 void softwareDebounce(uint8_t sampleData){
 	static uint8_t sample_index= 0; //Index used to store switchsamples in array
@@ -111,6 +114,51 @@ void LCD_Command(unsigned char command)
 	// Pull enable bit low to make LCD process the command
 	TWI(LCD_ADDRESS,((command<<4) & 0xF0)|LCD_ENABLE|LCD_WRITE|LCD_BL);
 }
+void stepperStateMachine() {
+	//STATE MACHINE FOR UNL2003 FULL STEP MODE
+	switch(stepperState){
+		//STEP AB
+		case 0:
+		PORTD |= (1<<PORTD1);
+		PORTC |= (1<<PORTC1);
+		
+		PORTC &= ~(1<<PORTC2);
+		PORTC &= ~(1<<PORTC3);
+
+		stepperState=stepperState+stepperDirection;
+		break;
+		//STEP BC
+		case 1:
+		PORTC |= (1<<PORTC2)|(1<<PORTC1);
+		PORTD &= ~(1<<PORTD1);
+		PORTC &= ~(1<<PORTC3);
+		stepperState=stepperState+stepperDirection;
+		break;
+		//STEP CD
+		case 2:
+		PORTC |= (1<<PORTC2)|(1<<PORTC3);
+		PORTD &= ~(1<<PORTD1);
+		PORTC &= ~(1<<PORTC1);
+		stepperState=stepperState+stepperDirection;
+		break;
+		//STEP DA
+		case 3:
+		PORTC |= (1<<PORTC3);
+		PORTD |= (1<<PORTD1);
+		
+		PORTC &= ~(1<<PORTC1);
+		PORTC &= ~(1<<PORTC2);
+		stepperState=stepperState+stepperDirection;
+		break;
+	}
+	//CHECK STEPPER STATE OVERFLOW
+	if (stepperState>3){
+		stepperState=0;
+	}
+	else if (stepperState<0){
+		stepperState=3;
+	}
+}
 
 void clearNumbers() {
 	LCD_Command(SET_ADDRESS|0x45);
@@ -124,94 +172,6 @@ void clearNumbers() {
 	currentCode[1] = 0;
 	currentCode[2] = 0;
 }
-
-
-void lockStateMachine(){
-	if(!(PIND&(1<<PIND5))) {
-		currentButton = 1;
-	} else if(!(PIND&(1<<PIND6))) {
-		currentButton = 2;
-	} else if(!(PIND&(1<<PIND7))) {
-		currentButton = 3;
-	}
-	if(alarmcode[alarmIndex] == currentButton && armed == 0) {
-		currentCode[alarmIndex] = currentButton;
-		alarmIndex++;
-		LCD_Display('0' + currentButton);
-		if(alarmIndex == 3) {
-			LCD_Command(SET_ADDRESS|0x4E);
-			LCD_Display('1'); 
-			LCD_Display('0');
-			enableCountDown = 1;
-		}
-		
-	} else if(armedCode[alarmIndex] == currentButton && armed == 1) {
-		currentCode[alarmIndex] = currentButton;
-		alarmIndex++;
-		LCD_Display('0' + currentButton);
-		if(alarmIndex == 3) {
-			LCD_Command(SET_ADDRESS|0x4E);
-			LCD_Display('1');
-			LCD_Display('0');
-			enableCountDown = 1;
-		} } else {
-			if(armed == 1) {
-				alarmEnable = 1;
-			}
-		clearNumbers();
-	}
-	
-	
-}
-	
-
-
-void stepperStateMachine() {
-	//STATE MACHINE FOR UNL2003 FULL STEP MODE
-	switch(stepperState){
-		//STEP AB
-		case 0:
-		PORTC=0x03;
-		stepperState=stepperState+stepperDirection;
-		break;
-		//STEP BC
-		case 1:
-		PORTC=0x06;
-		stepperState=stepperState+stepperDirection;
-		break;
-		//STEP CD
-		case 2:
-		PORTC=0x0C;
-		stepperState=stepperState+stepperDirection;
-		break;
-		//STEP DA
-		case 3:
-		PORTC=0x09;
-		stepperState=stepperState+stepperDirection;
-		break;
-	}
-	//CHECK STEPPER STATE OVERFLOW
-	if (stepperState>3){
-		stepperState=0;
-	}
-	else if (stepperState<0){
-		stepperState=3;
-	}
-}
-
-void rotateMotor() {
-	if(armed == 0) {
-		stepperDirection = 1;
-		} else {
-		stepperDirection = -1;
-	}
-	for(uint64_t i = 0; i < 512; i++)	{
-		stepperStateMachine();
-		_delay_ms(10);
-	}
-	stepperDirection = 0;
-	
-}
 void displayLockState() {
 	LCD_Command(SET_ADDRESS|0x00);
 	if(armed) {
@@ -223,7 +183,7 @@ void displayLockState() {
 		LCD_Display(' ');
 		LCD_Display(' ');
 		LCD_Display(' ');
-	} else {
+		} else {
 		LCD_Display('D');
 		LCD_Display('I');
 		LCD_Display('S');
@@ -232,6 +192,75 @@ void displayLockState() {
 		LCD_Display('M');
 		LCD_Display('E');
 		LCD_Display('D');
+	}
+}
+void rotateMotor() {
+	if(armed == 0) {
+		stepperDirection = 1;
+		} else {
+		stepperDirection = -1;
+	}
+	for(uint64_t i = 0; i < 512; i++)	{
+		stepperStateMachine();
+		_delay_ms(10);
+	}
+	stepperDirection = 0;
+}
+void alarmDisable() {
+	PORTB &= ~(1<<PORTB0);
+	PORTD |= (1<<PORTD3);
+	alarmEnable = 0;
+	displayLockState();
+	SPDR = 0b01010101;
+}
+void lockStateMachine(){
+	if(!(PIND&(1<<PIND5))) {
+		currentButton = 1;
+	} else if(!(PIND&(1<<PIND6))) {
+		currentButton = 2;
+	} else if(!(PIND&(1<<PIND7))) {
+		currentButton = 3;
+	}
+	if(alarmcode[alarmIndex] == currentButton && armed == 0) {
+		currentCode[alarmIndex] = currentButton;
+		alarmIndex++;
+		LCD_Command(SET_ADDRESS|(0x44+alarmIndex));
+		LCD_Display('0' + currentButton);
+		if(alarmIndex == 3) {
+			LCD_Command(SET_ADDRESS|0x4E);
+			LCD_Display('1'); 
+			LCD_Display('0');
+			enableCountDown = 1;
+		}
+		
+	} else if(armedCode[alarmIndex] == currentButton && armed == 1) {
+		currentCode[alarmIndex] = currentButton;
+		alarmIndex++;
+		LCD_Command(SET_ADDRESS|(0x44+alarmIndex));
+		LCD_Display('0' + currentButton);
+		if(alarmIndex == 3) {
+			alarmDisable();
+			rotateMotor();
+			PORTD ^= (1<<PORTD3);
+			PORTD ^= (1<<PORTD4);
+			armed ^= 1;
+			displayLockState();
+			clearNumbers();
+		} } else {
+			if(armed == 1) {
+				alarmEnable = 1;
+				LCD_Command(SET_ADDRESS|0x00);
+				LCD_Display('A');
+				LCD_Display('L');
+				LCD_Display('A');
+				LCD_Display('R');
+				LCD_Display('M');
+				LCD_Display(' ');
+				LCD_Display(' ');
+				LCD_Display(' ');
+				SPDR = 0b10101010;
+			}
+		clearNumbers();
 	}
 }
 	
@@ -255,8 +284,11 @@ ISR(TIMER1_COMPA_vect){
 				enableCountDown = 0;
 				countDownIndex = 10;
 				rotateMotor();
-				PORTB ^= (1<<PORTB1);
-				PORTB ^= (1<<PORTB2);
+				LCD_Command(SET_ADDRESS|0x4E);
+				LCD_Display(' ');
+				LCD_Display(' ');
+				PORTD ^= (1<<PORTD3);
+				PORTD ^= (1<<PORTD4);
 				armed ^= 1;
 				displayLockState();
 				clearNumbers();
@@ -267,16 +299,46 @@ ISR(TIMER1_COMPA_vect){
 		PORTB |= (1<<PORTB0);
 		countDownSecond++; 
 		if(countDownSecond > 255) {
-			PORTB ^= (1<<PORTB1);
+			countDownSecond = 0;
+			PORTD ^= (1<<PORTD3);
 		}
 	}
 }
 
+ISR(ADC_vect) {
+	//READ QUANTIZED VOLTAGE VALUE
+	uint16_t voltage_right = ADCL;
+	uint16_t voltage_left = ADCH;
+	uint16_t voltage = voltage_right | (voltage_left << 2);
+	voltage = (voltage*5);
+	// WRITE DIGITAL VALUE TO LCD SCREEN
+	if(voltage != oldVoltage){
+	LCD_Command(SET_ADDRESS | 0x0C);
+	LCD_Display(((voltage/1000)%10) + '0'); // tens
+	LCD_Display('.');
+	LCD_Display((voltage/100) % 10 + '0'); // ones
+	LCD_Display((voltage/10)%10 + '0');
+	}
+	oldVoltage = voltage;
+	ADCSRA |= (1<<ADSC);
+}
+
+ISR(INT0_vect) {
+	 PORTD ^= (1<<PORTD0);
+}
+
+ISR(SPI_STC_vect) {
+	transmit_done = 1;
+}
 
 int main(void)
 {
+	
+	DDRC = (1<<PINC4)|(1<<PINC5)|(0<<PINC0);
+	DDRB = (1<<PORTB0)|(1<<PORTB2)|(1<<PORTB3)|(0<<PORTB4)|(1<<PORTB5);
     //CONFIGURE IO
-    DDRD = (0<<PORTD5)|(0<<PORTD6)|(0<<PORTD7);
+    DDRD = (1<<PIND0)|(0<<PIND2)|(0<<PORTD5)|(0<<PORTD6)|(0<<PORTD7)|(1<<PORTD4)|(1<<PORTD3);
+	PORTD |= (1<<PORTD0);
     //Configure Bit Rate (TWBR and TWSR)
     TWBR = 18; //TWBR=18
     TWSR = (0<<TWPS1)|(1<<TWPS0); //PRESCALER = 1
@@ -284,8 +346,9 @@ int main(void)
     TWCR = (1<<TWEN);
     //INITIALIZE LCD
     TWI(LCD_ADDRESS,0x30|LCD_DISABLE|LCD_WRITE|LCD_BL); // (data length of 8, number of lines=2, 5x8 digit space, load data)
-    TWI(LCD_ADDRESS,0x30|LCD_ENABLE|LCD_WRITE|LCD_BL); // (clock in data)
-    _delay_ms(15);
+	TWI(LCD_ADDRESS,0x30|LCD_ENABLE|LCD_WRITE|LCD_BL); // (clock in data)
+	_delay_ms(15);
+	
     TWI(LCD_ADDRESS,0x30|LCD_DISABLE|LCD_WRITE|LCD_BL); // (data length of 8, number of lines=2, 5x8 digit space, load data)
     TWI(LCD_ADDRESS,0x30|LCD_ENABLE|LCD_WRITE|LCD_BL); // (clock in data)
     _delay_ms(4.1);
@@ -320,16 +383,30 @@ int main(void)
     LCD_Display('E');
     LCD_Display(':');
 	
-	PORTB |= (1<<PORTB2);
+	PORTD |= (1<<PORTD4);
     //Configure Timer 1
     TCCR1A=(0<<WGM11)|(0<<WGM10);
     TCCR1B=(0<<CS12)|(0<<CS11)|(1<<CS10)|(0<<WGM13)|(1<<WGM12);
     TIMSK1=(1<<OCIE1A);
     OCR1A=15999;
+	
+	ADMUX = (1 << REFS0)|(1<<ADLAR); 
+	ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); 
+	ADCSRA |= (1 << ADIE);      // Enable ADC interrupt
+	ADCSRA |= (1 << ADSC);      // Start ADC conversion
+	
+	EIMSK |= (1 << INT0);     // Enable INT0 interrupt
+	EICRA |= (1 << ISC01);    
+	EICRA &= ~(1 << ISC00);   
+	
+	SPCR = (1<<SPIE)|(1<<SPE)|(1<<MSTR)|(1<<CPOL)|(0<<CPHA)|(0<<SPR1)|(1<<SPR0)|(0<<DORD);
+	SPSR = (1<<SPI2X);
+	
     sei();
 	//timer 1 = 1 ms
     /* Replace with your application code */
-    while (1)
-    {
-    }
-    }
+	while(1) {
+
+	}
+	}
+    
