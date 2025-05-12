@@ -404,7 +404,6 @@ int main(void)
 	
     sei();
 	//timer 1 = 1 ms
-    /* Replace with your application code */
 	while(1) {
 
 	}
