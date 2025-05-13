@@ -1,8 +1,13 @@
 /*
- * main.cpp
+ * finalProjectCode.cpp
  *
- * Created: 4/25/2025 1:32:14 PM
- * Author : Logan Andrews and Carter Smith
+ * Final Project - ECE 484: Embedded Systems Design
+ * Miami University
+ * Authors: Logan Andrews and Carter Smith
+ *
+ *
+ * This project implements a smart alarm system and home hub on an AVR microcontroller
+ * 
  */ 
 
 #define F_CPU 16000000 // 16 MHz
@@ -13,6 +18,7 @@
 #define TWI_START 0xA4 //(enable=1, start=1, interrupt flag=1)
 #define TWI_STOP 0x94 //(enable=1, stop=1, interrupt flag=1)
 #define TWI_SEND 0x84 //(enable=1, start=0, interrupt flag=1)
+
 //LCD Signals
 //D7 D6 D5 D4 BL E RW RS
 #define LCD_ADDRESS 0x4E //device address (0x27) in 7 MSB + W (0) in LSB
@@ -22,42 +28,51 @@
 #define LCD_READ 0x01
 #define LCD_RS 0x01
 #define LCD_BL 0x08
+
 //LCD Commands (D0-D7 in Datasheet)
 #define CLEAR_DISPLAY 0x01 //need to wait 2ms after this call (perdatasheet)
 #define CURSOR_HOME 0x02 //need to wait 2ms after this call (perdatasheet)
 #define SET_ADDRESS 0x80
+
+// Global variables
 volatile uint8_t rising_edges = 0x00;
 volatile uint8_t falling_edges =0x00;
 volatile uint8_t switch_states =0x00;
 volatile uint8_t buttons = 0x00;
+
 volatile uint8_t buttonIndex = 0;
 volatile uint8_t lockstate = 0;
 uint16_t countDownNumber = 0;
 uint8_t countDownEnable = 0;
-//declare buffer array
+
+// Software debounce buffer
 const uint8_t kBufferLength = 8;
 volatile uint8_t switch_array[kBufferLength]={0};
-//stepper state machine variable
+
+// Stepper motor state and direction
 int8_t stepperState=0;
 int8_t stepperDirection=0;
 
+// Used for ADC voltage comparison
 uint16_t oldVoltage = 0;
 
-//alarm code
+// Alarm code setup
 int8_t alarmcode[] = {1, 2, 3};
 int8_t currentCode[] = {0, 0, 0};
 int8_t armedCode[] = {3, 2, 1};
 int8_t alarmIndex = 0;
 int8_t currentButton = 0;
 int8_t enableCountDown = 0;
-//10 second countdown
+
+// 10 Second countdown display
 int8_t countDownIndex = 10;
 int16_t countDownSecond = 0;
 double finalVoltage = 0;
 int8_t armed = 0;
 int8_t alarmEnable = 0;
 volatile uint8_t transmit_done = 0;
-//Sample switches at particular interval
+
+// Uses an 8-sample history to debounce switch inputs
 void softwareDebounce(uint8_t sampleData){
 	static uint8_t sample_index= 0; //Index used to store switchsamples in array
 	uint8_t stable_high = 0xFF; //Initialize temporarystable_high all high
@@ -80,6 +95,8 @@ void softwareDebounce(uint8_t sampleData){
 	if(++sample_index>=kBufferLength)
 	sample_index = 0;//wrap
 }
+
+// Sends I2C data to LCD
 void TWI(unsigned char address, unsigned char data)
 {
 	TWCR = TWI_START; //send start condition
@@ -92,6 +109,8 @@ void TWI(unsigned char address, unsigned char data)
 	while(!(TWCR & (1<<TWINT))){} //wait for data byte to transmit
 	TWCR = TWI_STOP; //finish transaction
 }
+
+// Send data to LCD
 void LCD_Display(unsigned char data)
 {
 	// Put in character data upper bits while keeping enable bit high
@@ -103,6 +122,8 @@ void LCD_Display(unsigned char data)
 	// Pull enable bit low to make LCD display the data
 	TWI(LCD_ADDRESS,((data<<4) & 0xF0)|LCD_ENABLE|LCD_WRITE|LCD_BL|LCD_RS);
 }
+
+// Send command to LCD
 void LCD_Command(unsigned char command)
 {
 	// Put in command data upper bits while keeping enable bit high
@@ -114,6 +135,8 @@ void LCD_Command(unsigned char command)
 	// Pull enable bit low to make LCD process the command
 	TWI(LCD_ADDRESS,((command<<4) & 0xF0)|LCD_ENABLE|LCD_WRITE|LCD_BL);
 }
+
+// Controls stepper motor using the sequence AB, BC, CD, DA
 void stepperStateMachine() {
 	//STATE MACHINE FOR UNL2003 FULL STEP MODE
 	switch(stepperState){
@@ -160,6 +183,7 @@ void stepperStateMachine() {
 	}
 }
 
+// Clears input code from LCD and resets alarm code input index
 void clearNumbers() {
 	LCD_Command(SET_ADDRESS|0x45);
 	LCD_Display(' ');
@@ -172,6 +196,8 @@ void clearNumbers() {
 	currentCode[1] = 0;
 	currentCode[2] = 0;
 }
+
+// Updates the first line of LCD to show current system state (ARMED or DISARMED)
 void displayLockState() {
 	LCD_Command(SET_ADDRESS|0x00);
 	if(armed) {
@@ -194,6 +220,8 @@ void displayLockState() {
 		LCD_Display('D');
 	}
 }
+
+// Rotates stepper motor 90 degrees CW to lock or CCW to unlock
 void rotateMotor() {
 	if(armed == 0) {
 		stepperDirection = 1;
@@ -206,6 +234,8 @@ void rotateMotor() {
 	}
 	stepperDirection = 0;
 }
+
+//Disables and sends disarm code over SPI
 void alarmDisable() {
 	PORTB &= ~(1<<PORTB0);
 	PORTD |= (1<<PORTD3);
@@ -213,6 +243,8 @@ void alarmDisable() {
 	displayLockState();
 	SPDR = 0b01010101;
 }
+
+// Handles user input for arming/disarming system and triggers alarm on wrong code
 void lockStateMachine(){
 	if(!(PIND&(1<<PIND5))) {
 		currentButton = 1;
@@ -263,7 +295,11 @@ void lockStateMachine(){
 		clearNumbers();
 	}
 }
-	
+
+// Main system timer interrupt at 1ms interval.
+// 1. Debounces and monitors button presses and triggers lock state logic
+// 2. Countdown timer for arming the system
+// 3. Alarm blinking and buzzer timing
 ISR(TIMER1_COMPA_vect){
 	buttons = PIND&0b11100000;
 	softwareDebounce(buttons);
@@ -305,6 +341,7 @@ ISR(TIMER1_COMPA_vect){
 	}
 }
 
+// Reads ADC value from potentiometer and updates LCD voltage display
 ISR(ADC_vect) {
 	//READ QUANTIZED VOLTAGE VALUE
 	uint16_t voltage_right = ADCL;
@@ -323,27 +360,30 @@ ISR(ADC_vect) {
 	ADCSRA |= (1<<ADSC);
 }
 
+// Toggles output LED from pushbutton
 ISR(INT0_vect) {
 	 PORTD ^= (1<<PORTD0);
 }
 
+// SPI transfer complete
 ISR(SPI_STC_vect) {
 	transmit_done = 1;
 }
 
+// Main function
 int main(void)
 {
-	
+	// Configure outputs and inputs for stepper, LEDs, buttons, and LCD
 	DDRC = (1<<PINC4)|(1<<PINC5)|(0<<PINC0);
 	DDRB = (1<<PORTB0)|(1<<PORTB2)|(1<<PORTB3)|(0<<PORTB4)|(1<<PORTB5);
-    //CONFIGURE IO
     DDRD = (1<<PIND0)|(0<<PIND2)|(0<<PORTD5)|(0<<PORTD6)|(0<<PORTD7)|(1<<PORTD4)|(1<<PORTD3);
 	PORTD |= (1<<PORTD0);
+
     //Configure Bit Rate (TWBR and TWSR)
     TWBR = 18; //TWBR=18
     TWSR = (0<<TWPS1)|(1<<TWPS0); //PRESCALER = 1
-    //Configure TWI Interface (TWCR)
-    TWCR = (1<<TWEN);
+    TWCR = (1<<TWEN); // Enable TWI
+
     //INITIALIZE LCD
     TWI(LCD_ADDRESS,0x30|LCD_DISABLE|LCD_WRITE|LCD_BL); // (data length of 8, number of lines=2, 5x8 digit space, load data)
 	TWI(LCD_ADDRESS,0x30|LCD_ENABLE|LCD_WRITE|LCD_BL); // (clock in data)
@@ -362,11 +402,14 @@ int main(void)
     //HOME CURSOR
     TWI(LCD_ADDRESS,0x80|LCD_DISABLE|LCD_WRITE|LCD_BL); // (load data)
     TWI(LCD_ADDRESS,0x80|LCD_ENABLE|LCD_WRITE|LCD_BL); // (clock in data)
+
     //CLEAR DISPLAY AND WAIT TO FINSIH
     LCD_Command(CLEAR_DISPLAY);
     _delay_ms(2);
     LCD_Command(0x0C); //Display no cursor
     LCD_Command(0x06); //Automatic Increment
+
+	// Display "DiSARMED" on line 1
     LCD_Command(SET_ADDRESS|0x00);
     LCD_Display('D');
     LCD_Display('I');
@@ -376,6 +419,7 @@ int main(void)
     LCD_Display('M');
 	LCD_Display('E');
 	LCD_Display('D');
+	// Display "CODE: " on line 2
     LCD_Command(SET_ADDRESS|0x40);
     LCD_Display('C');
     LCD_Display('O');
@@ -383,29 +427,35 @@ int main(void)
     LCD_Display('E');
     LCD_Display(':');
 	
-	PORTD |= (1<<PORTD4);
+	PORTD |= (1<<PORTD4); // Turn green LED on by default
     //Configure Timer 1
+
+	// configure Timer1 for 1ms interval
     TCCR1A=(0<<WGM11)|(0<<WGM10);
-    TCCR1B=(0<<CS12)|(0<<CS11)|(1<<CS10)|(0<<WGM13)|(1<<WGM12);
+    TCCR1B=(0<<CS12)|(0<<CS11)|(1<<CS10)|(0<<WGM13)|(1<<WGM12); // CTC mode, no prescaler
     TIMSK1=(1<<OCIE1A);
-    OCR1A=15999;
+    OCR1A=15999; // 1ms @ 16MHz
 	
+	// Setup for ADC for voltage reading
 	ADMUX = (1 << REFS0)|(1<<ADLAR); 
 	ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); 
 	ADCSRA |= (1 << ADIE);      // Enable ADC interrupt
 	ADCSRA |= (1 << ADSC);      // Start ADC conversion
 	
+	// Enable external interrupt on INT0
 	EIMSK |= (1 << INT0);     // Enable INT0 interrupt
 	EICRA |= (1 << ISC01);    
 	EICRA &= ~(1 << ISC00);   
 	
+	// Configure SPI in Master mode
 	SPCR = (1<<SPIE)|(1<<SPE)|(1<<MSTR)|(1<<CPOL)|(0<<CPHA)|(0<<SPR1)|(1<<SPR0)|(0<<DORD);
 	SPSR = (1<<SPI2X);
 	
-    sei();
-	//timer 1 = 1 ms
-	while(1) {
+    sei(); // Enable global interrupts
 
+	while(1) {
+		// Main loop intentionally left empty
+		// Since logic is driven by interrupts
 	}
-	}
+}
     
